@@ -1,0 +1,31 @@
+{
+    "name": "react-slider-views",
+    "version": "1.0.0",
+    "description": "Mirror for react-swipeable-views because the original packages do not have a good support",
+    "main": "build/index.js",
+    "types": "build/index.d.ts",
+    "scripts": {
+        "build": "rollup -c",
+        "dev": "webpack --watch",
+        "start": "rollup -c -w"
+    },
+    "keywords": [
+        "react",
+        "swipeable-views"
+    ],
+    "author": "Manu Overa",
+    "license": "MIT",
+    "devDependencies": {
+        "@babel/cli": "^7.18.10",
+        "@babel/core": "^7.18.13",
+        "@babel/preset-env": "^7.18.10",
+        "@babel/preset-react": "^7.18.6",
+        "@rollup/plugin-babel": "^5.3.1",
+        "rollup": "^2.79.0"
+    },
+    "dependencies": {
+        "prop-types": "^15.8.1",
+        "react-swipeable-views-core": "^0.14.0",
+        "warning": "^4.0.3"
+    }
+}
