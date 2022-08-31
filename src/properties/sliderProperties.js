@@ -1,20 +1,22 @@
+/** @type {{activeSlide: HTMLElement, containerNode: HTMLElement, firstRenderTimeout: Function, isSwiping: any, ignoreNextScrollEvents: boolean, indexCurrent: any, startX: number, startY: number, lastX: number, olderProps: object, rootNode: HTMLElement, startIndex: number, started: boolean, transitionListener: Function, touchMoveListener: Function, viewLength: number, vx: number}} */
 const sliderProperties = {
-    rootNode: null,
+    activeSlide: null,
     containerNode: null,
+    firstRenderTimeout: null,
     ignoreNextScrollEvents: false,
-    viewLength: 0,
-    startX: 0,
-    lastX: 0,
-    vx: 0,
-    startY: 0,
+    indexCurrent: null,
     isSwiping: undefined,
+    lastX: 0,
+    olderProps: null,
+    rootNode: null,
     started: false,
     startIndex: 0,
-    transitionListener: null,
+    startX: 0,
+    startY: 0,
     touchMoveListener: null,
-    activeSlide: null,
-    indexCurrent: null,
-    firstRenderTimeout: null,
+    transitionListener: null,
+    viewLength: 0,
+    vx: 0,
 };
 
 export { sliderProperties };

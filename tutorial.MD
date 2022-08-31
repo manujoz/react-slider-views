@@ -23,8 +23,7 @@ test
 Instala los siguientes paquetes como dependencias de desarrollo:
 
 ```
-npm i -D rollup @rollup/plugin-babel @babel/cli @babel/core @babel/preset-env @babel/preset-react
-npm i -D react webpack copy-webpack-plugin @babel/cli @babel/core @babel/preset-env @babel/preset-react babel-loader
+npm i -D rollup rollup-plugin-copy rollup-plugin-terser @rollup/plugin-babel @babel/cli @babel/core @babel/preset-env @babel/preset-react
 ```
 
 ### Paso 4
@@ -73,7 +72,7 @@ Ten en cuenta el el **_component_name_** es el nombre que el componente tiene en
 En una ventana del terminal en la carpeta raiz del componente ejectua el script de watch de webpack, para que conforme vayamos modificando el componente se vaya actualizando en la carpeta **build**.
 
 ```
-npm run dev
+npm start
 ```
 
 En otra ventana del terminal, en la carpeta **test**, ejecuta la aplicación de react y añade tu componente a al **src/App.js** para empezar a editarlo.
