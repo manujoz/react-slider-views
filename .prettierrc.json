@@ -1,0 +1,21 @@
+{
+    "tabWidth": 4,
+    "jsxBracketSameLine": true,
+    "printWidth": 150,
+    "overrides": [
+        {
+            "files": "*.php",
+            "options": {
+                "phpVersion": "7.4",
+                "printWidth": 220
+            }
+        },
+        {
+            "files": "*.xml",
+            "options": {
+                "printWidth": 250,
+                "tabWidth": 4
+            }
+        }
+    ]
+}

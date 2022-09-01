@@ -1,0 +1,10 @@
+.next/*
+.vscode/*
+.notes/*
+app/simulation
+vendor/*
+*.css
+
+app/views/panel/docs/index.php
+app/views/panel/docs/add.php
+app/views/panel/docs/article.php
