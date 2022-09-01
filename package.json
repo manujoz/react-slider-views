@@ -1,6 +1,6 @@
 {
     "name": "react-slider-views",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Mirror for react-swipeable-views because the original packages do not have a good support",
     "main": "build/index.js",
     "types": "build/index.d.ts",
@@ -12,6 +12,10 @@
         "react",
         "swipeable-views"
     ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/manujoz/react-slider-views.git"
+    },
     "author": "Manu Overa",
     "license": "MIT",
     "devDependencies": {
