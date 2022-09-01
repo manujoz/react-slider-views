@@ -21,6 +21,9 @@ export default {
         copy({
             targets: [{ src: "src/**/*.d.ts", dest: "build" }],
         }),
+        copy({
+            targets: [{ src: "src/styles", dest: "build" }],
+        }),
         isProduction && terser(),
     ],
     external: ["react", "react-dom", "warning", "react-swipeable-views-core"],

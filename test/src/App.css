@@ -1,3 +1,32 @@
 .App {
   text-align: left;
 }
+
+.slide {
+  padding: 15px;
+  min-height: 150px;
+  color: white;
+}
+.slide1 {
+  background-color: green;
+}
+.slide2 {
+  background-color: orange;
+}
+.slide3 {
+  background-color: blueviolet;
+}
+.navigation {
+  position: relative;
+  padding: 15px;
+  display: flex;
+  flex-flow: row wrap;
+}
+.navigation > div {
+  position: relative;
+  flex-grow: 1;
+  flex-basis: 0;
+}
+.navigation > .right {
+  text-align: right;
+}

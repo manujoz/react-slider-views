@@ -1,404 +1,486 @@
-import React, { useState, createContext, useEffect, useRef } from "react";
+import * as React from "react";
 import PropTypes from "prop-types";
 import warning from "warning";
-import { constant, computeIndex, getDisplaySameSlide } from "react-swipeable-views-core";
+import { constant, checkIndexBounds, computeIndex, getDisplaySameSlide } from "react-swipeable-views-core";
 
-// External functions
-import { addEventListeners, createTransition, adaptMouse, applyRotationMatrix, getDomTreeShapes, findNativeHandler } from "./helpers/functions";
+function addEventListener(node, event, handler, options) {
+    node.addEventListener(event, handler, options);
+    return {
+        remove() {
+            node.removeEventListener(event, handler, options);
+        },
+    };
+}
 
-// Common properties
-import { styles } from "./properties/styles";
-import { axisProperties } from "./properties/axisProperties";
-import { sliderProperties } from "./properties/sliderProperties";
+const styles = {
+    container: {
+        direction: "ltr",
+        display: "flex",
+        willChange: "transform",
+    },
+    slide: {
+        width: "100%",
+        WebkitFlexShrink: 0,
+        flexShrink: 0,
+        overflow: "auto",
+    },
+};
+
+const axisProperties = {
+    root: {
+        x: {
+            overflowX: "hidden",
+        },
+        "x-reverse": {
+            overflowX: "hidden",
+        },
+        y: {
+            overflowY: "hidden",
+        },
+        "y-reverse": {
+            overflowY: "hidden",
+        },
+    },
+    flexDirection: {
+        x: "row",
+        "x-reverse": "row-reverse",
+        y: "column",
+        "y-reverse": "column-reverse",
+    },
+    transform: {
+        x: (translate) => `translate(${-translate}%, 0)`,
+        "x-reverse": (translate) => `translate(${translate}%, 0)`,
+        y: (translate) => `translate(0, ${-translate}%)`,
+        "y-reverse": (translate) => `translate(0, ${translate}%)`,
+    },
+    length: {
+        x: "width",
+        "x-reverse": "width",
+        y: "height",
+        "y-reverse": "height",
+    },
+    rotationMatrix: {
+        x: {
+            x: [1, 0],
+            y: [0, 1],
+        },
+        "x-reverse": {
+            x: [-1, 0],
+            y: [0, 1],
+        },
+        y: {
+            x: [0, 1],
+            y: [1, 0],
+        },
+        "y-reverse": {
+            x: [0, -1],
+            y: [1, 0],
+        },
+    },
+    scrollPosition: {
+        x: "scrollLeft",
+        "x-reverse": "scrollLeft",
+        y: "scrollTop",
+        "y-reverse": "scrollTop",
+    },
+    scrollLength: {
+        x: "scrollWidth",
+        "x-reverse": "scrollWidth",
+        y: "scrollHeight",
+        "y-reverse": "scrollHeight",
+    },
+    clientLength: {
+        x: "clientWidth",
+        "x-reverse": "clientWidth",
+        y: "clientHeight",
+        "y-reverse": "clientHeight",
+    },
+};
+
+function createTransition(property, options) {
+    const { duration, easeFunction, delay } = options;
+
+    return `${property} ${duration} ${easeFunction} ${delay}`;
+}
+
+// We are using a 2x2 rotation matrix.
+function applyRotationMatrix(touch, axis) {
+    const rotationMatrix = axisProperties.rotationMatrix[axis];
+
+    return {
+        pageX: rotationMatrix.x[0] * touch.pageX + rotationMatrix.x[1] * touch.pageY,
+        pageY: rotationMatrix.y[0] * touch.pageX + rotationMatrix.y[1] * touch.pageY,
+    };
+}
+
+function adaptMouse(event) {
+    event.touches = [{ pageX: event.pageX, pageY: event.pageY }];
+    return event;
+}
+
+export function getDomTreeShapes(element, rootNode) {
+    let domTreeShapes = [];
+
+    while (element && element !== rootNode && element !== document.body) {
+        // We reach a Swipeable View, no need to look higher in the dom tree.
+        if (element.hasAttribute("data-swipeable")) {
+            break;
+        }
+
+        const style = window.getComputedStyle(element);
+
+        if (
+            // Ignore the scroll children if the element is absolute positioned.
+            style.getPropertyValue("position") === "absolute" ||
+            // Ignore the scroll children if the element has an overflowX hidden
+            style.getPropertyValue("overflow-x") === "hidden"
+        ) {
+            domTreeShapes = [];
+        } else if (
+            (element.clientWidth > 0 && element.scrollWidth > element.clientWidth) ||
+            (element.clientHeight > 0 && element.scrollHeight > element.clientHeight)
+        ) {
+            // Ignore the nodes that have no width.
+            // Keep elements with a scroll
+            domTreeShapes.push({
+                element,
+                scrollWidth: element.scrollWidth,
+                scrollHeight: element.scrollHeight,
+                clientWidth: element.clientWidth,
+                clientHeight: element.clientHeight,
+                scrollLeft: element.scrollLeft,
+                scrollTop: element.scrollTop,
+            });
+        }
+
+        element = element.parentNode;
+    }
+
+    return domTreeShapes;
+}
 
 // We can only have one node at the time claiming ownership for handling the swipe.
 // Otherwise, the UX would be confusing.
 // That's why we use a singleton here.
 let nodeWhoClaimedTheScroll = null;
 
-// First render
-let isFirstRender = true;
+export function findNativeHandler(params) {
+    const { domTreeShapes, pageX, startX, axis } = params;
 
-const ReactSliderViews = (props) => {
-    // Destructuring props
-    const {
-        action,
-        animateHeight = false,
-        animateTransitions = true,
-        axis = "x",
-        children,
-        containerStyle: containerStyleProp,
-        disabled = false,
-        disableLazyLoading = false,
-        enableMouseEvents = false,
-        hysteresis = 0.6,
-        ignoreNativeScroll = false,
-        index = 0,
-        onChangeIndex,
-        onSwitching,
-        onMouseDown,
-        onMouseLeave,
-        onMouseMove,
-        onMouseUp,
-        onScroll,
-        onTouchEnd,
-        onTouchStart,
-        onTransitionEnd,
-        resistance = false,
-        style,
-        slideStyle: slideStyleProp,
-        springConfig = { duration: "0.35s", easeFunction: "cubic-bezier(0.15, 0.3, 0.25, 1)", delay: "0s" },
-        slideClassName,
-        threshold = 5,
-        ...other
-    } = props;
-
-    // States
-    const [indexLatest, setIndexLatest] = useState(index);
-    const [isDragging, setIsDragging] = useState(false);
-    const [renderOnlyActive, setRenderOnlyActive] = useState(!disableLazyLoading);
-    const [heightLatest, setHeightLatest] = useState(0);
-    const [displaySameSlide, setDisplaySameSlide] = useState(true);
-
-    // Context
-    const SwipeableViewsContext = createContext();
-    if (process.env.NODE_ENV !== "production") {
-        SwipeableViewsContext.displayName = "SwipeableViewsContext";
-    }
-
-    /**
-     * Set index current
-     */
-    const setIndexCurrent = (indexCurrent) => {
-        if (!animateTransitions && sliderProperties.indexCurrent !== indexCurrent) {
-            handleTransitionEnd();
+    return domTreeShapes.some((shape) => {
+        // Determine if we are going backward or forward.
+        let goingForward = pageX >= startX;
+        if (axis === "x" || axis === "y") {
+            goingForward = !goingForward;
         }
 
-        console.log("setIndexCurrent", indexCurrent);
-        sliderProperties.indexCurrent = indexCurrent;
+        // scrollTop is not always be an integer.
+        // https://github.com/jquery/api.jquery.com/issues/608
+        const scrollPosition = Math.round(shape[axisProperties.scrollPosition[axis]]);
 
-        if (sliderProperties.containerNode) {
-            const transform = axisProperties.transform[axis](indexCurrent * 100);
-            sliderProperties.containerNode.style.WebkitTransform = transform;
-            sliderProperties.containerNode.style.transform = transform;
+        const areNotAtStart = scrollPosition > 0;
+        const areNotAtEnd = scrollPosition + shape[axisProperties.clientLength[axis]] < shape[axisProperties.scrollLength[axis]];
+
+        if ((goingForward && areNotAtEnd) || (!goingForward && areNotAtStart)) {
+            nodeWhoClaimedTheScroll = shape.element;
+            return true;
         }
-    };
 
-    /**
-     * Behaivor similar to componentWillReceiveProps
-     */
-    const componentWillReceiveProps = () => {
-        const aic = sliderProperties.indexCurrent !== null ? parseInt(sliderProperties.indexCurrent.toString()) : null;
-        console.log("componentWillReceiveProps", index, sliderProperties.indexCurrent);
-        if (typeof index === "number" && index !== aic && sliderProperties.olderProps) {
-            console.log("Update componentWillReceiveProps");
-            setDisplaySameSlide(getDisplaySameSlide(sliderProperties.olderProps, props));
-            setIndexLatest(index);
-            setIndexCurrent(index);
+        return false;
+    });
+}
+
+export const SwipeableViewsContext = React.createContext();
+
+if (process.env.NODE_ENV !== "production") {
+    SwipeableViewsContext.displayName = "SliderViewsContext";
+}
+
+class SliderViews extends React.Component {
+    rootNode = null;
+    containerNode = null;
+    ignoreNextScrollEvents = false;
+    viewLength = 0;
+    startX = 0;
+    lastX = 0;
+    vx = 0;
+    startY = 0;
+    isSwiping = undefined;
+    started = false;
+    startIndex = 0;
+    transitionListener = null;
+    touchMoveListener = null;
+    activeSlide = null;
+    indexCurrent = null;
+    firstRenderTimeout = null;
+
+    constructor(props) {
+        super(props);
+
+        if (process.env.NODE_ENV !== "production") {
+            checkIndexBounds(props);
         }
-        sliderProperties.olderProps = props;
-    };
 
-    // Constructor behaivor
-    if (isFirstRender) {
-        isFirstRender = false;
-        setIndexCurrent(index);
-    }
-
-    // Call to componentWillReceiveProps
-    componentWillReceiveProps();
-
-    // Effects called on first render only for manage componentWillUnmount
-    useEffect(() => {
-        // componentWillUnmount in functional component is a return in useEffect
-        return () => {
-            sliderProperties.transitionListener.remove();
-            sliderProperties.touchMoveListener.remove();
-            clearTimeout(sliderProperties.firstRenderTimeout);
+        this.state = {
+            indexLatest: props.index,
+            // Set to true as soon as the component is swiping.
+            // It's the state counter part of this.isSwiping.
+            isDragging: false,
+            // Help with SSR logic and lazy loading logic.
+            renderOnlyActive: !props.disableLazyLoading,
+            heightLatest: 0,
+            // Let the render method that we are going to display the same slide than previously.
+            displaySameSlide: true,
         };
-    }, []);
+        this.setIndexCurrent(props.index);
+    }
 
-    // Effects called each render similar to componentDidMount and componentDidUpdate
-    useEffect(() => {
-        sliderProperties.transitionListener = addEventListeners(sliderProperties.containerNode, "transitionend", (event) => {
-            if (event.target !== sliderProperties.containerNode) {
+    componentDidMount() {
+        // Subscribe to transition end events.
+        this.transitionListener = addEventListener(this.containerNode, "transitionend", (event) => {
+            if (event.target !== this.containerNode) {
                 return;
             }
 
-            handleTransitionEnd();
+            this.handleTransitionEnd();
         });
 
-        sliderProperties.touchMoveListener = addEventListeners(
-            sliderProperties.rootNode,
+        // Block the thread to handle that event.
+        this.touchMoveListener = addEventListener(
+            this.rootNode,
             "touchmove",
             (event) => {
-                if (disabled) {
+                // Handling touch events is disabled.
+                if (this.props.disabled) {
                     return;
                 }
-
-                handleSwipeMove(event);
+                this.handleSwipeMove(event);
             },
             {
                 passive: false,
             }
         );
 
-        if (disableLazyLoading) {
-            sliderProperties.firstRenderTimeout = setTimeout(() => {
-                setRenderOnlyActive(false);
+        if (!this.props.disableLazyLoading) {
+            this.firstRenderTimeout = setTimeout(() => {
+                this.setState({
+                    renderOnlyActive: false,
+                });
             }, 0);
         }
 
-        if (action) {
-            action({ updateHeight });
+        // Send all functions in an object if action param is set.
+        if (this.props.action) {
+            this.props.action({
+                updateHeight: this.updateHeight,
+            });
         }
-    });
+    }
 
-    // Effects called when indexLatest updated
-    const didMountIl = useRef(false);
-    useEffect(() => {
-        if (!didMountIl.current) {
-            didMountIl.current = true;
-            return;
-        }
-        console.log("Cambia indexLatest", indexLatest);
-        if (onSwitching) {
-            onSwitching(indexLatest, "end");
-        }
+    // UNSAFE_componentWillReceiveProps(nextProps) {
+    //     const { index } = nextProps;
 
-        if (onChangeIndex) {
-            onChangeIndex(indexLatestm, { reason: "swipe" });
-        }
+    //     if (typeof index === "number" && index !== this.props.index) {
+    //         if (process.env.NODE_ENV !== "production") {
+    //             checkIndexBounds(nextProps);
+    //         }
 
-        if (sliderProperties.indexCurrent === indexLatest) {
-            handleTransitionEnd();
-        }
-    }, [indexLatest]);
-
-    // Effect called when displaySameSlide updated
-    const didMountSS = useRef(false);
-    useEffect(() => {
-        if (!didMountSS.current) {
-            didMountSS.current = true;
-            return;
-        }
-
-        if (onSwitching) {
-            onSwitching(sliderProperties.indexCurrent, "move");
-        }
-    }, [displaySameSlide]);
+    //         this.setIndexCurrent(index);
+    //         this.setState({
+    //             // If true, we are going to change the children. We shoudn't animate it.
+    //             displaySameSlide: getDisplaySameSlide(this.props, nextProps),
+    //             indexLatest: index,
+    //         });
+    //     }
+    // }
 
     /**
-     * Get swipeable views context
+     *
+     * @param {import("../build").ReactSliderViewsProps} prevProps
+     * @param {any} prevState
      */
-    const getSwipeableViewsContext = () => {
+    componentDidUpdate(prevProps, prevState) {
+        const { index } = this.props;
+        if (typeof index === "number" && index !== prevProps.index) {
+            if (process.env.NODE_ENV !== "production") {
+                checkIndexBounds(this.props);
+            }
+
+            this.setIndexCurrent(index);
+            this.setState({
+                // If true, we are going to change the children. We shoudn't animate it.
+                displaySameSlide: getDisplaySameSlide(prevProps, this.props),
+                indexLatest: index,
+            });
+        }
+    }
+
+    componentWillUnmount() {
+        this.transitionListener.remove();
+        this.touchMoveListener.remove();
+        clearTimeout(this.firstRenderTimeout);
+    }
+
+    getSwipeableViewsContext() {
         return {
             slideUpdateHeight: () => {
-                updateHeight();
+                this.updateHeight();
             },
         };
+    }
+
+    setIndexCurrent(indexCurrent) {
+        if (!this.props.animateTransitions && this.indexCurrent !== indexCurrent) {
+            this.handleTransitionEnd();
+        }
+
+        this.indexCurrent = indexCurrent;
+
+        if (this.containerNode) {
+            const { axis } = this.props;
+            const transform = axisProperties.transform[axis](indexCurrent * 100);
+            this.containerNode.style.WebkitTransform = transform;
+            this.containerNode.style.transform = transform;
+        }
+    }
+
+    setRootNode = (node) => {
+        this.rootNode = node;
     };
 
-    /**
-     * Handle mouse down event
-     *
-     * @param {Event} event
-     */
-    const handleMouseDown = (event) => {
-        if (onMouseDown) {
-            onMouseDown(event);
-        }
-
-        event.persist();
-        handleSwipeStart(adaptMouse(event));
+    setContainerNode = (node) => {
+        this.containerNode = node;
     };
 
-    /**
-     * Handle mouse leave event
-     *
-     * @param {Event} event
-     */
-    const handleMouseLeave = (event) => {
-        if (onMouseLeave) {
-            onMouseLeave(event);
-        }
-
-        if (sliderProperties.started) {
-            handleSwipeEnd(adaptMouse(event));
-        }
+    setActiveSlide = (node) => {
+        this.activeSlide = node;
+        this.updateHeight();
     };
 
-    /**
-     * Handle mouse move event
-     *
-     * @param {Event} event
-     */
-    const handleMouseMove = (event) => {
-        if (onMouseMove) {
-            onMouseMove(event);
-        }
+    handleSwipeStart = (event) => {
+        const { axis } = this.props;
 
-        if (sliderProperties.started) {
-            handleSwipeMove(adaptMouse(event));
-        }
-    };
-
-    /**
-     * Handle mouse up event
-     *
-     * @param {Event} event
-     */
-    const handleMouseUp = (event) => {
-        if (onMouseUp) {
-            onMouseUp(event);
-        }
-
-        handleSwipeEnd(adaptMouse(event));
-    };
-
-    /**
-     * Handle scroll event
-     *
-     * @param {Event} event
-     */
-    const handleScroll = (event) => {
-        if (onScroll) {
-            onScroll(event);
-        }
-
-        if (event.target !== sliderProperties.rootNode) {
-            return;
-        }
-
-        if (sliderProperties.ignoreNextScrollEvents) {
-            sliderProperties.ignoreNextScrollEvents = false;
-            return;
-        }
-
-        const indexNew = Math.ceil(event.target.scrollLeft / event.target.clientWidth) + indexLatest;
-
-        sliderProperties.ignoreNextScrollEvents = true;
-        event.target.scrollLeft = 0;
-
-        if (onChangeIndex && indexNew !== indexLatest) {
-            onChangeIndex(indexNew, indexLatest, { reason: "focus" });
-        }
-    };
-
-    /**
-     * Handle the swipe start
-     *
-     * @param {Event} event
-     */
-    const handleSwipeStart = (event) => {
         const touch = applyRotationMatrix(event.touches[0], axis);
 
-        sliderProperties.viewLength = sliderProperties.rootNode.getBoundingClientRect()[axisProperties.length[axis]];
-        sliderProperties.startX = touch.pageX;
-        sliderProperties.lastX = touch.pageX;
-        sliderProperties.vx = 0;
-        sliderProperties.startY = touch.pageY;
-        sliderProperties.isSwiping = undefined;
-        sliderProperties.started = true;
+        this.viewLength = this.rootNode.getBoundingClientRect()[axisProperties.length[axis]];
+        this.startX = touch.pageX;
+        this.lastX = touch.pageX;
+        this.vx = 0;
+        this.startY = touch.pageY;
+        this.isSwiping = undefined;
+        this.started = true;
 
-        const computedStyle = window.getComputedStyle(sliderProperties.containerNode);
+        const computedStyle = window.getComputedStyle(this.containerNode);
         const transform = computedStyle.getPropertyValue("-webkit-transform") || computedStyle.getPropertyValue("transform");
 
         if (transform && transform !== "none") {
             const transformValues = transform.split("(")[1].split(")")[0].split(",");
-            const rootStyle = window.getComputedStyle(sliderProperties.rootNode);
-            const transformNormalized = applyRotationMatrix(
-                { pageX: parseInt(transformValues[4], 10), pageY: parseInt(transformValues[5], 10) },
+            const rootStyle = window.getComputedStyle(this.rootNode);
+
+            const tranformNormalized = applyRotationMatrix(
+                {
+                    pageX: parseInt(transformValues[4], 10),
+                    pageY: parseInt(transformValues[5], 10),
+                },
                 axis
             );
 
-            sliderProperties.startIndex =
-                -transformNormalized.pageX /
-                    (sliderProperties.viewLength - parseInt(rootStyle.paddingLeft, 10) - parseInt(rootStyle.paddingRight, 10)) || 0;
+            this.startIndex =
+                -tranformNormalized.pageX / (this.viewLength - parseInt(rootStyle.paddingLeft, 10) - parseInt(rootStyle.paddingRight, 10)) || 0;
         }
     };
 
-    /**
-     * Handle the swipe move
-     *
-     * @param {Event} event
-     */
-    const handleSwipeMove = (event) => {
-        if (!sliderProperties.started) {
-            handleTouchStart(event);
+    handleSwipeMove = (event) => {
+        // The touch start event can be cancel.
+        // Makes sure we set a starting point.
+        if (!this.started) {
+            this.handleTouchStart(event);
             return;
         }
 
-        if (nodeWhoClaimedTheScroll !== null && nodeWhoClaimedTheScroll !== sliderProperties.rootNode) {
+        // We are not supposed to hanlde this touch move.
+        if (nodeWhoClaimedTheScroll !== null && nodeWhoClaimedTheScroll !== this.rootNode) {
             return;
         }
 
+        const { axis, children, ignoreNativeScroll, onSwitching, resistance } = this.props;
         const touch = applyRotationMatrix(event.touches[0], axis);
 
-        if (sliderProperties.isSwiping === undefined) {
-            const dx = Math.abs(touch.pageX - sliderProperties.startX);
-            const dy = Math.abs(touch.pageY - sliderProperties.startY);
+        // We don't know yet.
+        if (this.isSwiping === undefined) {
+            const dx = Math.abs(touch.pageX - this.startX);
+            const dy = Math.abs(touch.pageY - this.startY);
 
             const isSwiping = dx > dy && dx > constant.UNCERTAINTY_THRESHOLD;
 
+            // We let the parent handle the scroll.
             if (
-                resistance &&
+                !resistance &&
                 (axis === "y" || axis === "y-reverse") &&
-                ((sliderProperties.indexCurrent === 0 && sliderProperties.startX < touch.pageX) ||
-                    (sliderProperties.indexCurrent === React.Children.count(children) - 1 && sliderProperties.startX > touch.pageX))
+                ((this.indexCurrent === 0 && this.startX < touch.pageX) ||
+                    (this.indexCurrent === React.Children.count(this.props.children) - 1 && this.startX > touch.pageX))
             ) {
-                sliderProperties.isSwiping = false;
+                this.isSwiping = false;
                 return;
             }
 
+            // We are likely to be swiping, let's prevent the scroll event.
             if (dx > dy) {
                 event.preventDefault();
             }
 
             if (isSwiping === true || dy > constant.UNCERTAINTY_THRESHOLD) {
-                sliderProperties.isSwiping = isSwiping;
-                sliderProperties.startX = touch.pageX;
-                return;
+                this.isSwiping = isSwiping;
+                this.startX = touch.pageX; // Shift the starting point.
+
+                return; // Let's wait the next touch event to move something.
             }
         }
 
-        if (sliderProperties.isSwiping !== true) {
+        if (this.isSwiping !== true) {
             return;
         }
 
+        // We are swiping, let's prevent the scroll event.
         event.preventDefault();
 
-        sliderProperties.vx = sliderProperties.vx * 0.5 + (touch.pageX - sliderProperties.lastX) * 0.5;
-        sliderProperties.lastX = touch.pageX;
+        // Low Pass filter.
+        this.vx = this.vx * 0.5 + (touch.pageX - this.lastX) * 0.5;
+        this.lastX = touch.pageX;
 
         const { index, startX } = computeIndex({
             children,
             resistance,
             pageX: touch.pageX,
-            startIndex: sliderProperties.startIndex,
-            startX: sliderProperties.startX,
-            viewLength: sliderProperties.viewLength,
+            startIndex: this.startIndex,
+            startX: this.startX,
+            viewLength: this.viewLength,
         });
 
+        // Add support for native scroll elements.
         if (nodeWhoClaimedTheScroll === null && !ignoreNativeScroll) {
-            const domTreeShapes = getDomTreeShapes(event.target, sliderProperties.rootNode);
+            const domTreeShapes = getDomTreeShapes(event.target, this.rootNode);
             const hasFoundNativeHandler = findNativeHandler({
                 domTreeShapes,
-                startX: sliderProperties.startX,
+                startX: this.startX,
                 pageX: touch.pageX,
                 axis,
             });
 
+            // We abort the touch move handler.
             if (hasFoundNativeHandler) {
                 return;
             }
         }
 
+        // We are moving toward the edges.
         if (startX) {
-            sliderProperties.startX = startX;
+            this.startX = startX;
+        } else if (nodeWhoClaimedTheScroll === null) {
+            nodeWhoClaimedTheScroll = this.rootNode;
         }
 
-        setIndexCurrent(index);
+        this.setIndexCurrent(index);
 
         const callback = () => {
             if (onSwitching) {
@@ -406,202 +488,296 @@ const ReactSliderViews = (props) => {
             }
         };
 
-        if (displaySameSlide || isDragging) {
-            setDisplaySameSlide(false);
-            isDragging(true);
+        if (this.state.displaySameSlide || !this.state.isDragging) {
+            this.setState(
+                {
+                    displaySameSlide: false,
+                    isDragging: true,
+                },
+                callback
+            );
         }
 
         callback();
     };
 
-    /**
-     * Handle the swipe end
-     *
-     * @param {Event} event
-     */
-    const handleSwipeEnd = (event) => {
+    handleSwipeEnd = () => {
         nodeWhoClaimedTheScroll = null;
 
-        if (!sliderProperties.started) {
+        // The touch start event can be cancel.
+        // Makes sure that a starting point is set.
+        if (!this.started) {
             return;
         }
 
-        sliderProperties.started = false;
+        this.started = false;
 
-        if (sliderProperties.isSwiping !== true) {
+        if (this.isSwiping !== true) {
             return;
         }
 
-        const indexCurrent = sliderProperties.indexCurrent;
+        const indexLatest = this.state.indexLatest;
+        const indexCurrent = this.indexCurrent;
         const delta = indexLatest - indexCurrent;
 
         let indexNew;
 
-        if (Math.abs(sliderProperties.vx) > threshold) {
-            if (sliderProperties.vx > 0) {
+        // Quick movement
+        if (Math.abs(this.vx) > this.props.threshold) {
+            if (this.vx > 0) {
                 indexNew = Math.floor(indexCurrent);
             } else {
                 indexNew = Math.ceil(indexCurrent);
             }
-        } else if (Math.abs(delta) > hysteresis) {
+        } else if (Math.abs(delta) > this.props.hysteresis) {
+            // Some hysteresis with indexLatest.
             indexNew = delta > 0 ? Math.floor(indexCurrent) : Math.ceil(indexCurrent);
         } else {
             indexNew = indexLatest;
         }
 
-        const indexMax = React.Children.count(children) - 1;
-        indexNew = indexNew < 0 ? 0 : indexMax;
+        const indexMax = React.Children.count(this.props.children) - 1;
 
-        setIndexCurrent(indexNew);
-        setIndexLatest(indexNew);
-        setIsDragging(false);
-    };
-
-    /**
-     * Handle touch start
-     *
-     * @param {Event} event
-     */
-    const handleTouchStart = (event) => {
-        if (onTouchStart) {
-            onTouchStart(event);
+        if (indexNew < 0) {
+            indexNew = 0;
+        } else if (indexNew > indexMax) {
+            indexNew = indexMax;
         }
 
-        handleSwipeStart(event);
+        this.setIndexCurrent(indexNew);
+        this.setState(
+            {
+                indexLatest: indexNew,
+                isDragging: false,
+            },
+            () => {
+                if (this.props.onSwitching) {
+                    this.props.onSwitching(indexNew, "end");
+                }
+
+                if (this.props.onChangeIndex && indexNew !== indexLatest) {
+                    this.props.onChangeIndex(indexNew, indexLatest, {
+                        reason: "swipe",
+                    });
+                }
+
+                // Manually calling handleTransitionEnd in that case as isn't otherwise.
+                if (indexCurrent === indexLatest) {
+                    this.handleTransitionEnd();
+                }
+            }
+        );
     };
 
-    /**
-     * Handle touch end
-     *
-     * @param {Event} event
-     */
-    const handleTouchEnd = (event) => {
-        if (onTouchEnd) {
-            onTouchEnd(event);
+    handleTouchStart = (event) => {
+        if (this.props.onTouchStart) {
+            this.props.onTouchStart(event);
+        }
+        this.handleSwipeStart(event);
+    };
+
+    handleTouchEnd = (event) => {
+        if (this.props.onTouchEnd) {
+            this.props.onTouchEnd(event);
+        }
+        this.handleSwipeEnd(event);
+    };
+
+    handleMouseDown = (event) => {
+        if (this.props.onMouseDown) {
+            this.props.onMouseDown(event);
+        }
+        event.persist();
+        this.handleSwipeStart(adaptMouse(event));
+    };
+
+    handleMouseUp = (event) => {
+        if (this.props.onMouseUp) {
+            this.props.onMouseUp(event);
+        }
+        this.handleSwipeEnd(adaptMouse(event));
+    };
+
+    handleMouseLeave = (event) => {
+        if (this.props.onMouseLeave) {
+            this.props.onMouseLeave(event);
         }
 
-        handleSwipeEnd(event);
+        // Filter out events
+        if (this.started) {
+            this.handleSwipeEnd(adaptMouse(event));
+        }
     };
 
-    /**
-     * Call onTransitionEnd listener
-     */
-    const handleTransitionEnd = () => {
-        if (!onTransitionEnd || displaySameSlide) {
+    handleMouseMove = (event) => {
+        if (this.props.onMouseMove) {
+            this.props.onMouseMove(event);
+        }
+
+        // Filter out events
+        if (this.started) {
+            this.handleSwipeMove(adaptMouse(event));
+        }
+    };
+
+    handleScroll = (event) => {
+        if (this.props.onScroll) {
+            this.props.onScroll(event);
+        }
+
+        // Ignore events bubbling up.
+        if (event.target !== this.rootNode) {
             return;
         }
 
-        if (isDragging) {
-            onTransitionEnd();
+        if (this.ignoreNextScrollEvents) {
+            this.ignoreNextScrollEvents = false;
+            return;
+        }
+
+        const indexLatest = this.state.indexLatest;
+        const indexNew = Math.ceil(event.target.scrollLeft / event.target.clientWidth) + indexLatest;
+
+        this.ignoreNextScrollEvents = true;
+        // Reset the scroll position.
+        event.target.scrollLeft = 0;
+
+        if (this.props.onChangeIndex && indexNew !== indexLatest) {
+            this.props.onChangeIndex(indexNew, indexLatest, {
+                reason: "focus",
+            });
         }
     };
 
-    /**
-     * Set active slide
-     */
-    const setActiveSlide = (node) => {
-        sliderProperties.activeSlide = node;
-        updateHeight();
-    };
-
-    /**
-     *  container node
-     */
-    const setContainerNode = (node) => {
-        sliderProperties.containerNode = node;
-    };
-
-    /**
-     * Set root node
-     */
-    const setRootNode = (node) => {
-        sliderProperties.rootNode = node;
-    };
-
-    /**
-     * Update height
-     */
-    const updateHeight = () => {
-        if (sliderProperties.activeSlide !== null) {
-            const child = sliderProperties.activeSlide.children[0];
-            if (child !== undefined && child.offsetHeight !== undefined && heightLatest !== child.offsetHeight) {
-                setHeightLatest(child.offsetHeight);
+    updateHeight = () => {
+        if (this.activeSlide !== null) {
+            const child = this.activeSlide.children[0];
+            if (child !== undefined && child.offsetHeight !== undefined && this.state.heightLatest !== child.offsetHeight) {
+                this.setState({
+                    heightLatest: child.offsetHeight,
+                });
             }
         }
     };
 
-    const touchEvents = !disabled
-        ? {
-              onTouchStart: handleTouchStart,
-              onTouchEnd: handleTouchEnd,
-          }
-        : {};
-    const mouseEvents =
-        !disabled && enableMouseEvents
-            ? {
-                  onMouseDown: handleMouseDown,
-                  onMouseUp: handleMouseUp,
-                  onMouseLeave: handleMouseLeave,
-                  onMouseMove: handleMouseMove,
-              }
-            : {};
+    handleTransitionEnd() {
+        if (!this.props.onTransitionEnd) {
+            return;
+        }
 
-    // There is no point to animate if we are already providing a height.
-    warning(
-        !animateHeight || !containerStyleProp || !containerStyleProp.height,
-        `react-swipeable-view: You are setting animateHeight to true but you are also providing a custom height. The custom height has a higher priority than the animateHeight property. So animateHeight is most likely having no effect at all.`
-    );
+        // Filters out when changing the children
+        if (this.state.displaySameSlide) {
+            return;
+        }
 
-    const slideStyle = Object.assign({}, styles.slide, slideStyleProp);
-
-    let transition;
-    let WebkitTransition;
-
-    if (isDragging || !animateTransitions || displaySameSlide) {
-        transition = "all 0s ease 0s";
-        WebkitTransition = "all 0s ease 0s";
-    } else {
-        transition = createTransition("transform", springConfig);
-        WebkitTransition = createTransition("-webkit-transform", springConfig);
-
-        if (heightLatest !== 0) {
-            const additionalTranstion = `, ${createTransition("height", springConfig)}`;
-            transition += additionalTranstion;
-            WebkitTransition += additionalTranstion;
+        // The rest callback is triggered when swiping. It's just noise.
+        // We filter it out.
+        if (!this.state.isDragging) {
+            this.props.onTransitionEnd();
         }
     }
 
-    const containerStyle = {
-        height: null,
-        WebkitFlexDirection: axisProperties.flexDirection[axis],
-        flexDirection: axisProperties.flexDirection[axis],
-        WebkitTransition,
-        transition,
-    };
+    render() {
+        const {
+            action,
+            animateHeight,
+            animateTransitions,
+            axis,
+            children,
+            containerStyle: containerStyleProp,
+            disabled,
+            disableLazyLoading,
+            enableMouseEvents,
+            hysteresis,
+            ignoreNativeScroll,
+            index,
+            onChangeIndex,
+            onSwitching,
+            onTransitionEnd,
+            resistance,
+            slideStyle: slideStyleProp,
+            slideClassName,
+            springConfig,
+            style,
+            threshold,
+            ...other
+        } = this.props;
 
-    // Apply the styles for SSR considerations
-    if (!renderOnlyActive) {
-        const transform = axisProperties.transform[axis](sliderProperties.indexCurrent * 100);
-        containerStyle.WebkitTransform = transform;
-        containerStyle.transform = transform;
-    }
+        const { displaySameSlide, heightLatest, indexLatest, isDragging, renderOnlyActive } = this.state;
+        const touchEvents = !disabled
+            ? {
+                  onTouchStart: this.handleTouchStart,
+                  onTouchEnd: this.handleTouchEnd,
+              }
+            : {};
+        const mouseEvents =
+            !disabled && enableMouseEvents
+                ? {
+                      onMouseDown: this.handleMouseDown,
+                      onMouseUp: this.handleMouseUp,
+                      onMouseLeave: this.handleMouseLeave,
+                      onMouseMove: this.handleMouseMove,
+                  }
+                : {};
 
-    if (animateHeight) {
-        containerStyle.height = heightLatest;
-    }
+        // There is no point to animate if we are already providing a height.
+        warning(
+            !animateHeight || !containerStyleProp || !containerStyleProp.height,
+            `react-swipeable-view: You are setting animateHeight to true but you are
+also providing a custom height.
+The custom height has a higher priority than the animateHeight property.
+So animateHeight is most likely having no effect at all.`
+        );
 
-    return (
-        <>
-            <SwipeableViewsContext.Provider value={getSwipeableViewsContext()}>
+        const slideStyle = Object.assign({}, styles.slide, slideStyleProp);
+
+        let transition;
+        let WebkitTransition;
+
+        if (isDragging || !animateTransitions || displaySameSlide) {
+            transition = "all 0s ease 0s";
+            WebkitTransition = "all 0s ease 0s";
+        } else {
+            transition = createTransition("transform", springConfig);
+            WebkitTransition = createTransition("-webkit-transform", springConfig);
+
+            if (heightLatest !== 0) {
+                const additionalTranstion = `, ${createTransition("height", springConfig)}`;
+                transition += additionalTranstion;
+                WebkitTransition += additionalTranstion;
+            }
+        }
+
+        const containerStyle = {
+            height: null,
+            WebkitFlexDirection: axisProperties.flexDirection[axis],
+            flexDirection: axisProperties.flexDirection[axis],
+            WebkitTransition,
+            transition,
+        };
+
+        // Apply the styles for SSR considerations
+        if (!renderOnlyActive) {
+            const transform = axisProperties.transform[axis](this.indexCurrent * 100);
+            containerStyle.WebkitTransform = transform;
+            containerStyle.transform = transform;
+        }
+
+        if (animateHeight) {
+            containerStyle.height = heightLatest;
+        }
+
+        return (
+            <SwipeableViewsContext.Provider value={this.getSwipeableViewsContext()}>
                 <div
-                    ref={setRootNode}
+                    ref={this.setRootNode}
                     style={Object.assign({}, axisProperties.root[axis], style)}
                     {...other}
                     {...touchEvents}
                     {...mouseEvents}
-                    onScroll={handleScroll}>
+                    onScroll={this.handleScroll}>
                     <div
-                        ref={setContainerNode}
+                        ref={this.setContainerNode}
                         style={Object.assign({}, containerStyle, styles.container, containerStyleProp)}
                         className="react-swipeable-view-container">
                         {React.Children.map(children, (child, indexChild) => {
@@ -611,7 +787,8 @@ const ReactSliderViews = (props) => {
 
                             warning(
                                 React.isValidElement(child),
-                                `react-swipeable-view: one of the children provided is invalid: ${child}. We are expecting a valid React Element`
+                                `react-swipeable-view: one of the children provided is invalid: ${child}.
+  We are expecting a valid React Element`
                             );
 
                             let ref;
@@ -621,7 +798,7 @@ const ReactSliderViews = (props) => {
                                 hidden = false;
 
                                 if (animateHeight) {
-                                    ref = setActiveSlide;
+                                    ref = this.setActiveSlide;
                                     slideStyle.overflowY = "hidden";
                                 }
                             }
@@ -635,13 +812,16 @@ const ReactSliderViews = (props) => {
                     </div>
                 </div>
             </SwipeableViewsContext.Provider>
-        </>
-    );
-};
+        );
+    }
+}
 
-export default ReactSliderViews;
+// Added as an ads for people using the React dev tools in production.
+// So they know, the tool used to build the awesome UI they
+// are looking at/retro engineering.
+SliderViews.displayName = "ReactSliderViews";
 
-ReactSliderViews.propTypes = {
+SliderViews.propTypes = {
     /**
      * This is callback property. It's called by the component on mount.
      * This is useful when you want to trigger an action programmatically.
@@ -795,3 +975,24 @@ ReactSliderViews.propTypes = {
      */
     threshold: PropTypes.number,
 };
+
+SliderViews.defaultProps = {
+    animateHeight: false,
+    animateTransitions: true,
+    axis: "x",
+    disabled: false,
+    disableLazyLoading: false,
+    enableMouseEvents: false,
+    hysteresis: 0.6,
+    ignoreNativeScroll: false,
+    index: 0,
+    threshold: 5,
+    springConfig: {
+        duration: "0.35s",
+        easeFunction: "cubic-bezier(0.15, 0.3, 0.25, 1)",
+        delay: "0s",
+    },
+    resistance: false,
+};
+
+export default SliderViews;
