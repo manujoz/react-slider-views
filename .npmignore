@@ -6,4 +6,4 @@ test
 .prettierignore
 .prettierrc.json
 tutorial.MD
-webpack.config.js
+rollup.config.js
