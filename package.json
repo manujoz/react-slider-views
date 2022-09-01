@@ -1,6 +1,6 @@
 {
     "name": "react-slider-views",
-    "version": "1.0.1",
+    "version": "1.0.3",
     "description": "Mirror for react-swipeable-views because the original packages do not have a good support",
     "main": "build/index.js",
     "types": "build/index.d.ts",

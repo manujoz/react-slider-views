@@ -1,8 +1,9 @@
 node_modules
+static
 test
 .babelrc
-.eslintrc.js
+.eslintrc.json
 .prettierignore
 .prettierrc.json
 tutorial.MD
-webpack.config.js
+rollup.config.js
