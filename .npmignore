@@ -1,7 +1,8 @@
 node_modules
+static
 test
 .babelrc
-.eslintrc.js
+.eslintrc.json
 .prettierignore
 .prettierrc.json
 tutorial.MD
